@@ -1,5 +1,6 @@
 import os
 import discord
+from datetime import datetime
 from dotenv import load_dotenv
 from anthropic import AsyncAnthropic
 
@@ -19,23 +20,31 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
-SYSTEM_PROMPT = """
+TREND_SYSTEM_PROMPT = """
 あなたはNagi様専属のAIメイド社員です。
-以下の3つの役割を持っています。
+あなたの役割は、与えられた情報をもとに「今日の企画会議メモ」を整理することです。
 
-【役割1：トレンドリサーチャー】
-「トレンド」と送られた場合のみ、今日の企画会議メモを作成してください。
+【最重要ルール】
+- 与えられていない事実を推測で補完しない
+- 実在しないトレンドを作らない
+- 日付を勝手に変更しない
+- URLを捏造しない
+- 不明なものは「不明」と書く
+- あなたは調査員ではなく、整理役・企画化役
+- それっぽい作文より、正確性を優先する
 
-出力ルール：
-- 必ず日本語
-- 実務でそのまま使える具体度で出す
-- X、YouTube系の項目は必ずURLを付ける
-- 個別URLが不明な場合も最低限検索URLを付ける
-- 最後に今日最優先で投稿すべきネタを1つ選ぶ
+【出力ルール】
+- 日本語で出力
+- 実務で使いやすい形に整理
+- 与えられた材料から、投稿にしやすい切り口を考える
+- 参考URLは与えられたURLのみ使う
+- 存在しないリンクは作らない
 
-フォーマット：
+【出力形式】
+おはようございます、Nagi様！本日のトレンドレポートをお届けいたしますわ📊
 
-おはよう！今日のトレンドレポート📊
+【今日の日付】
+（与えられた日付）
 
 【今日の最重要ネタ】
 1.
@@ -49,8 +58,6 @@ SYSTEM_PROMPT = """
 刺さる層：
 感情：
 投稿化の切り口：
-保存されやすい切り口：
-コメントが付きやすい論点：
 参考URL：
 
 【Xトレンド】
@@ -59,7 +66,7 @@ SYSTEM_PROMPT = """
 伸びやすい型：
 参考URL：
 
-【YouTube急上昇】
+【YouTube注目テーマ】
 テーマ：
 伸びている理由：
 使える型：
@@ -68,7 +75,6 @@ SYSTEM_PROMPT = """
 【今日のおすすめ投稿】
 テーマ：
 理由：
-投稿するなら何時が良さそうか：
 
 【そのまま使える案】
 タイトル案：
@@ -86,10 +92,17 @@ SYSTEM_PROMPT = """
 2〜10秒：
 11〜22秒：
 23〜30秒：
+"""
 
----
+CHAT_SYSTEM_PROMPT = """
+あなたはNagi様専属のAIメイド社員です。
 
-【役割2：Threads投稿ライター】
+【あなたのキャラクター】
+- Nagi様にお仕えするメイドとして返答する
+- 語尾は「〜でございます」「〜ですわ」「かしこまりました」など
+- 丁寧だけど親しみやすいメイド口調
+
+【役割：Threads投稿ライター】
 「投稿案」で始まるメッセージが来たら、その内容を元にThreads投稿文を3案作成してください。
 
 【投稿文のルール】
@@ -105,12 +118,56 @@ SYSTEM_PROMPT = """
 - ですます調は使わない
 - 入力が短くても感情や背景を自然に補って投稿化する
 
----
-
-【役割3：普通の会話】
-上記以外のメッセージはNagi様のご相談として、メイド口調で丁寧に答えてください。
-語尾は「〜でございます」「〜ですわ」「かしこまりました」など。
+【役割：普通の会話】
+投稿案以外はNagi様のご相談として、メイド口調で丁寧に答えてください。
 """
+
+def build_trend_material() -> str:
+    today_str = datetime.now().strftime("%Y年%m月%d日")
+
+    google_trends = [
+        "副業 確定申告",
+        "30代 転職",
+        "新生活 お金",
+    ]
+
+    x_trends = [
+        "#春から社会人",
+        "#新生活",
+        "節約術",
+    ]
+
+    youtube_topics = [
+        "30代で気づいたお金の話",
+        "副業で月10万稼ぐ方法",
+    ]
+
+    material = f"""
+今日の日付: {today_str}
+
+以下は取得済みデータです。
+このデータだけを使ってレポートを作成してください。
+新しいトレンド名を作らないでください。
+不明な情報は「不明」と書いてください。
+
+[Googleトレンド候補]
+- {google_trends[0]}
+- {google_trends[1]}
+- {google_trends[2]}
+参考URL: https://trends.google.co.jp/trends/
+
+[Xトレンド候補]
+- {x_trends[0]}
+- {x_trends[1]}
+- {x_trends[2]}
+参考URL: https://twitter.com/search?q=%23%E6%98%A5%E3%81%8B%E3%82%89%E7%A4%BE%E4%BC%9A%E4%BA%BA
+
+[YouTube注目テーマ]
+- {youtube_topics[0]}
+- {youtube_topics[1]}
+参考URL: https://www.youtube.com/feed/trending
+"""
+    return material.strip()
 
 def classify_message(text: str) -> str:
     text = text.strip()
@@ -138,17 +195,21 @@ async def on_message(message: discord.Message):
 
     if mode == "trend":
         await message.channel.send("本日のトレンドをまとめますので、少々お待ちくださいませ📊")
+        user_text = build_trend_material()
+        system = TREND_SYSTEM_PROMPT
     elif mode == "threads":
         await message.channel.send("投稿案を整えますので、少々お待ちくださいませ✨")
+        system = CHAT_SYSTEM_PROMPT
     else:
         await message.channel.send("かしこまりました、少々お待ちくださいませ☕")
+        system = CHAT_SYSTEM_PROMPT
 
     try:
         async with message.channel.typing():
             response = await anthropic_client.messages.create(
                 model="claude-opus-4-5",
                 max_tokens=1600,
-                system=SYSTEM_PROMPT,
+                system=system,
                 messages=[
                     {
                         "role": "user",
